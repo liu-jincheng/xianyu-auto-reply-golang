@@ -3,7 +3,6 @@ package scheduler
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -66,33 +65,17 @@ func (e *Engine) fetchItems(ctx context.Context, _ map[string]any) error {
 	}
 	failures := []string{}
 	for _, a := range accounts {
+		session := xianyu.ItemSyncAccount{OwnerID: a.OwnerID, AccountID: a.AccountID, Cookie: a.Cookie, Proxy: syncProxy(a)}
 		for page := 1; page <= 200; page++ {
-			res := xianyu.MTOPCall(ctx, xianyu.MTOPOptions{API: "mtop.alibaba.idle.seller.pc.common.item.search", Version: "1.0", Cookie: a.Cookie, Proxy: syncProxy(a), Origin: "https://seller.goofish.com", Referer: "https://seller.goofish.com/?site=COMMONPRO", Data: map[string]any{"pageNo": page, "pageSize": 30, "bizType": "commonPro", "searchRequest": "{}", "itemStatus": "0"}, ExtraParams: map[string]string{"spm_cnt": "a21107h.42826273.0.0", "needLoginPC": "true", "accountSite": "xianyu"}, ExtraHeaders: map[string]string{"idle_site_biz_code": "COMMONPRO", "idle_user_group_member_id": ""}})
-			if res.Cookie != "" && res.Cookie != a.Cookie {
-				a.Cookie = res.Cookie
-				_, _ = e.db.ExecContext(ctx, `UPDATE xy_accounts SET cookie=?,last_refresh_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=?`, a.Cookie, a.ID)
+			result, err := xianyu.SyncItemPage(ctx, e.db, e.callMTOP, &session, page)
+			if err == nil && page == 200 && result.HasMore {
+				err = fmt.Errorf("商品超过单次同步的200页上限，尚未全部获取")
 			}
-			if !res.Success {
-				failures = append(failures, a.AccountID+": "+res.Error)
+			if err != nil {
+				failures = append(failures, a.AccountID+": "+err.Error())
 				break
 			}
-			biz := syncNested(res.Response, "data", "data")
-			items, _ := biz["itemSearchResponseList"].([]any)
-			for _, raw := range items {
-				item, ok := raw.(map[string]any)
-				if !ok {
-					continue
-				}
-				id := strings.TrimSpace(fmt.Sprint(item["itemId"]))
-				if id == "" {
-					continue
-				}
-				mapped := map[string]any{"item_id": id, "id": id, "title": fmt.Sprint(item["title"]), "price": fmt.Sprint(item["reservePrice"]), "status": fmt.Sprint(item["itemStatus"]), "source": "seller", "image_url": fmt.Sprint(item["itemImageUrl"]), "quantity": item["quantity"], "idle_item_sku_list": item["idleItemSkuList"]}
-				b, _ := json.Marshal(mapped)
-				_, _ = e.db.ExecContext(ctx, `INSERT INTO xy_catalog_items(owner_id,account_id,item_id,title,price,status,data) VALUES(?,?,?,?,?,?,?) ON CONFLICT(account_id,item_id) DO UPDATE SET title=excluded.title,price=excluded.price,status=excluded.status,data=json_patch(COALESCE(xy_catalog_items.data,'{}'),excluded.data),updated_at=CURRENT_TIMESTAMP`, a.OwnerID, a.AccountID, id, mapped["title"], mapped["price"], mapped["status"], string(b))
-			}
-			more, _ := biz["hasNextPage"].(bool)
-			if !more {
+			if !result.HasMore {
 				break
 			}
 		}

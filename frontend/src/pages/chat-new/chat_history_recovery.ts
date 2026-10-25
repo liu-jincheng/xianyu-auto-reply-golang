@@ -1,14 +1,27 @@
 /** 聊天断线补偿：冻结旧范围，分页填补缺口，未完成时保存继续拉取的位置。 */
 import type { ChatMessage, Conversation } from '@/api/chatNew'
-import { mergeConversations, mergeMessages } from './chat_history_merge'
+import { mergeConversations, mergeMessages, toTimestampMs } from './chat_history_merge.ts'
+
+export const CHAT_HISTORY_SOURCE = 'im-paas-v1'
+export const CHAT_CONTENT_VERSION = 2
+
+export const isLegacyUnsupportedMessage = (message: ChatMessage) =>
+  (message.contentVersion ?? 0) < CHAT_CONTENT_VERSION &&
+    (!!message.card?.fallback || (!message.card && /^[\s]*[\[【]其他消息[\]】][\s]*$/.test(message.text)))
+
+export const needsMessageContentUpgrade = (cache?: MessageCache) =>
+  !!cache && cache.source === CHAT_HISTORY_SOURCE && (cache.contentVersion ?? 0) < CHAT_CONTENT_VERSION && cache.msgs.some(isLegacyUnsupportedMessage)
 
 export interface MessageCache {
+  contentVersion?: number
+  source?: string
   msgs: ChatMessage[]
   hasMore: boolean
   cursor: number | null
 }
 
 export interface ConversationCache {
+  source?: string
   convs: Conversation[]
   hasMore: boolean
   cursor: number | null
@@ -76,6 +89,10 @@ export async function recoverMessages(
   isCurrent: () => boolean,
 ): Promise<Recovered<ChatMessage> | null> {
   const knownIds = new Set(boundary.cache.msgs.map((message) => message.messageId).filter(Boolean))
+  const upgrading = needsMessageContentUpgrade(boundary.cache)
+  const missing = boundary.cache.msgs.filter(isLegacyUnsupportedMessage)
+  const missingIds = new Set(missing.map((message) => message.messageId).filter(Boolean))
+  const oldestMissing = Math.min(...missing.map((message) => toTimestampMs(message.time)).filter((time) => time > 0))
   let cursor = boundary.nextCursor
   let items: ChatMessage[] = []
   for (let pageIndex = 0; pageIndex < MAX_RECOVERY_PAGES; pageIndex++) {
@@ -83,11 +100,16 @@ export async function recoverMessages(
     const page = await fetchPage(cursor ?? undefined, 100)
     if (!isCurrent()) return null
     items = mergeMessages(page.items, items)
-    const reachedOldRange = page.items.some((message) => knownIds.has(message.messageId))
+    page.items.forEach((message) => missingIds.delete(message.messageId))
+    const reachedOldRange = upgrading
+      ? missingIds.size === 0 || (Number.isFinite(oldestMissing) && page.nextCursor !== null && page.nextCursor <= oldestMissing)
+      : page.items.some((message) => knownIds.has(message.messageId))
     if (!page.hasMore || reachedOldRange || boundary.cache.msgs.length === 0) {
       return { items, complete: true,
         hasMore: reachedOldRange && page.hasMore ? boundary.cache.hasMore : page.hasMore,
-        cursor: reachedOldRange && page.hasMore ? boundary.cache.cursor : page.nextCursor }
+        cursor: reachedOldRange && page.hasMore
+          ? boundary.cache.cursor !== null && page.nextCursor !== null ? Math.min(boundary.cache.cursor, page.nextCursor) : boundary.cache.cursor
+          : page.nextCursor }
     }
     checkCursor(page, cursor)
     cursor = page.nextCursor

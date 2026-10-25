@@ -54,8 +54,15 @@ export const getBeijingDateInputValue = getServerDateInputValue
 
 export function formatChatTime(timestamp: number): string {
   if (!timestamp) return ''
-  const wall = serverWallTime(new Date(timestamp))
+  const milliseconds = timestamp < 1_000_000_000_000 ? timestamp * 1000 : timestamp
+  const date = new Date(milliseconds)
+  if (Number.isNaN(date.getTime())) return ''
+  const wall = serverWallTime(date)
+  const now = serverWallTime(new Date(Date.now() + serverClockDelta))
   const time = wall.toLocaleTimeString('zh-CN', { timeZone: 'UTC', hour: '2-digit', minute: '2-digit', hour12: false })
-  if (getServerDateInputValue(new Date(timestamp)) === getServerDateInputValue()) return time
-  return wall.toLocaleDateString('zh-CN', { timeZone: 'UTC', month: '2-digit', day: '2-digit' }) + ' ' + time
+  if (getServerDateInputValue(date) === getServerDateInputValue()) return time
+  return wall.toLocaleDateString('zh-CN', {
+    timeZone: 'UTC', ...(wall.getUTCFullYear() !== now.getUTCFullYear() ? { year: 'numeric' } : {}),
+    month: '2-digit', day: '2-digit',
+  }) + ' ' + time
 }

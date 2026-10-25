@@ -28,6 +28,7 @@ import {
 import { useUIStore } from '@/store/uiStore'
 import type { AccountDetail } from '@/types'
 import { BrowseDistribution } from './BrowseDistribution'
+import { DataAnalysisError } from './DataAnalysisError'
 import {
   LineChart,
   Line,
@@ -106,6 +107,7 @@ export function DataOverview() {
   const [customStartDate, setCustomStartDate] = useState('')
   const [customEndDate, setCustomEndDate] = useState('')
   const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const [bannerData, setBannerData] = useState<BannerDataItem[]>([])
   const [graphData, setGraphData] = useState<GraphDataItem[]>([])
   const [chartMetric, setChartMetric] = useState('vstPv')
@@ -145,6 +147,7 @@ export function DataOverview() {
     }
 
     setLoading(true)
+    setError(null)
     try {
       const params: SellerSummaryRequest = {
         account_id: selectedAccountId,
@@ -164,12 +167,14 @@ export function DataOverview() {
           setGraphData([])
         }
       } else {
-        addToast({ type: 'error', message: result.message || '获取数据失败' })
+        setError(result.message || '获取数据失败')
         setBannerData([])
         setGraphData([])
       }
     } catch {
-      addToast({ type: 'error', message: '获取数据失败，请稍后重试' })
+      setError('获取数据失败，请稍后重试')
+      setBannerData([])
+      setGraphData([])
     } finally {
       setLoading(false)
     }
@@ -295,8 +300,10 @@ export function DataOverview() {
         </div>
       )}
 
+      {!loading && error && <DataAnalysisError message={error} />}
+
       {/* 核心指标卡片 + 趋势图表（左右布局） */}
-      {!loading && bannerData.length > 0 && (
+      {!loading && !error && bannerData.length > 0 && (
         <motion.div
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
@@ -402,7 +409,7 @@ export function DataOverview() {
       <BrowseDistribution />
 
       {/* 无数据提示 */}
-      {!loading && bannerData.length === 0 && selectedAccountId && (
+      {!loading && !error && bannerData.length === 0 && selectedAccountId && (
         <div className="flex flex-col items-center justify-center py-16 text-gray-400">
           <BarChart3 className="w-12 h-12 mb-3" />
           <p>暂无数据</p>

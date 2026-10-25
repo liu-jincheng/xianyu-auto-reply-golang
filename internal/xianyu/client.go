@@ -41,6 +41,7 @@ type Account struct {
 type Incoming struct {
 	AccountID, SenderID, SenderName, ChatID, ItemID, Text, Type string
 	Images                                                      []string
+	Card                                                        *ChatCard
 	// IsSelf marks IM echo messages sent by the currently connected seller.
 	// The online-chat page uses it to render the bubble on the right.
 	IsSelf     bool
@@ -396,7 +397,9 @@ func (m *Manager) connect(ctx context.Context, a Account) error {
 		}
 		_ = conn.SetReadDeadline(time.Now().Add(90 * time.Second))
 		var response map[string]any
-		if json.Unmarshal(raw, &response) == nil {
+		decoder := json.NewDecoder(bytes.NewReader(raw))
+		decoder.UseNumber()
+		if decoder.Decode(&response) == nil {
 			if mid := responseMID(response); mid != "" {
 				active.pendingMu.Lock()
 				waiter := active.pending[mid]
@@ -1459,6 +1462,14 @@ func decodeContent(v string) map[string]any {
 	return nil
 }
 func applyContent(v *Incoming, c map[string]any) {
+	display := ParseChatContent(c)
+	if display.Type == "card" {
+		v.Type, v.Card = "card", display.Card
+		if v.Text == "" {
+			v.Text = display.Text
+		}
+		return
+	}
 	ct := int64(0)
 	switch x := c["contentType"].(type) {
 	case float64:

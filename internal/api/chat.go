@@ -234,70 +234,48 @@ func (s *Server) chatConnection(connect bool) http.HandlerFunc {
 }
 
 func (s *Server) chatConversations(w http.ResponseWriter, r *http.Request) {
-	u := current(r)
-	accountID := chi.URLParam(r, "account_id")
-	limit := queryLimit(r, 20, 100)
-	rows, err := s.db.QueryContext(r.Context(), `SELECT id,data,created_at FROM event_logs WHERE owner_id=? AND account_id=? AND kind IN ('incoming_message','outgoing_message') ORDER BY id DESC LIMIT 1000`, u.ID, accountID)
-	if err != nil {
-		fail(w, 500, err.Error())
+	w.Header().Set("Cache-Control", "private, no-store")
+	account, found := s.ownedChatAccount(r, chi.URLParam(r, "account_id"))
+	if !found {
+		fail(w, http.StatusNotFound, "账号不存在或无权查看")
 		return
 	}
-	defer rows.Close()
-	seen := map[string]bool{}
-	items := []map[string]any{}
-	for rows.Next() && len(items) < limit {
-		var id int64
-		var raw, created string
-		_ = rows.Scan(&id, &raw, &created)
-		msg := decodeChatLog(raw, created)
-		cid := fmt.Sprint(msg["cid"])
-		if cid == "" || seen[cid] {
-			continue
-		}
-		seen[cid] = true
-		items = append(items, map[string]any{"cid": cid, "rawCid": cid, "otherUserId": msg["senderId"], "otherUserName": msg["senderName"], "otherUserAvatar": "", "itemTitle": "", "lastMessageSummary": msg["text"], "lastMessageTime": msg["time"], "unreadCount": 0})
+	cursor, err := chatCursor(r)
+	if err != nil {
+		fail(w, http.StatusBadRequest, err.Error())
+		return
 	}
-	ok(w, "查询成功", map[string]any{"conversations": items, "hasMore": false, "nextCursor": nil})
+	page, err := s.cloudChatConversations(r.Context(), account, cursor, queryLimit(r, 20, 100))
+	if err != nil {
+		write(w, http.StatusOK, response{Success: false, Message: "获取闲鱼会话失败：" + err.Error()})
+		return
+	}
+	ok(w, "查询成功", page)
 }
 
 func (s *Server) chatMessages(w http.ResponseWriter, r *http.Request) {
-	u := current(r)
-	accountID, cid := chi.URLParam(r, "account_id"), chi.URLParam(r, "cid")
-	limit := queryLimit(r, 20, 100)
-	// IM may echo messages sent by the seller as an incoming event.  Retain the
-	// normal log-kind check, then use both account_id and Cookie's unb as a
-	// backwards-compatible fallback for records persisted before IsSelf existed.
-	selfIDs := map[string]bool{"self": true, accountID: true}
-	var cookie string
-	if s.db.QueryRowContext(r.Context(), `SELECT cookie FROM xy_accounts WHERE owner_id=? AND account_id=?`, u.ID, accountID).Scan(&cookie) == nil {
-		if unb := chatCookieValue(cookie, "unb"); unb != "" {
-			selfIDs[unb] = true
-		}
-	}
-	rows, err := s.db.QueryContext(r.Context(), `SELECT id,kind,data,created_at FROM event_logs WHERE owner_id=? AND account_id=? AND kind IN ('incoming_message','outgoing_message') ORDER BY id DESC LIMIT 1000`, u.ID, accountID)
-	if err != nil {
-		fail(w, 500, err.Error())
+	w.Header().Set("Cache-Control", "private, no-store")
+	account, found := s.ownedChatAccount(r, chi.URLParam(r, "account_id"))
+	if !found {
+		fail(w, http.StatusNotFound, "账号不存在或无权查看")
 		return
 	}
-	defer rows.Close()
-	items := []map[string]any{}
-	for rows.Next() && len(items) < limit {
-		var id int64
-		var kind, raw, created string
-		_ = rows.Scan(&id, &kind, &raw, &created)
-		msg := decodeChatLog(raw, created)
-		if fmt.Sprint(msg["cid"]) != cid {
-			continue
-		}
-		msg["messageId"] = strconv.FormatInt(id, 10)
-		persistedSelf, _ := msg["isSelf"].(bool)
-		msg["isSelf"] = kind == "outgoing_message" || persistedSelf || selfIDs[fmt.Sprint(msg["senderId"])]
-		items = append(items, msg)
+	cursor, err := chatCursor(r)
+	if err != nil {
+		fail(w, http.StatusBadRequest, err.Error())
+		return
 	}
-	for left, right := 0, len(items)-1; left < right; left, right = left+1, right-1 {
-		items[left], items[right] = items[right], items[left]
+	cid := strings.TrimSpace(chi.URLParam(r, "cid"))
+	if cid == "" {
+		fail(w, http.StatusBadRequest, "会话ID不能为空")
+		return
 	}
-	ok(w, "查询成功", map[string]any{"messages": items, "hasMore": false, "nextCursor": nil})
+	page, err := s.cloudChatMessages(r.Context(), account, cid, cursor, queryLimit(r, 20, 100))
+	if err != nil {
+		write(w, http.StatusOK, response{Success: false, Message: "获取闲鱼聊天记录失败：" + err.Error()})
+		return
+	}
+	ok(w, "查询成功", page)
 }
 
 func chatCookieValue(raw, name string) string {

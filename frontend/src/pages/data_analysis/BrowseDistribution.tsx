@@ -10,6 +10,7 @@ import { getAccountDetails } from '@/api/accounts'
 import { getBrowseSummary, type BrowseSummaryRequest, type ProfileItem } from '@/api/data_analysis'
 import { useUIStore } from '@/store/uiStore'
 import type { AccountDetail } from '@/types'
+import { DataAnalysisError } from './DataAnalysisError'
 
 /** 时间范围选项 */
 const DATE_TYPE_OPTIONS = [
@@ -70,6 +71,7 @@ export function BrowseDistribution() {
   const [customStartDate, setCustomStartDate] = useState('')
   const [customEndDate, setCustomEndDate] = useState('')
   const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const [browseData, setBrowseData] = useState<{
     sceneSourceList: ProfileItem[]
     itemCateList: ProfileItem[]
@@ -111,6 +113,7 @@ export function BrowseDistribution() {
     }
 
     setLoading(true)
+    setError(null)
     try {
       const params: BrowseSummaryRequest = {
         account_id: selectedAccountId,
@@ -123,11 +126,11 @@ export function BrowseDistribution() {
       if (result.success && result.data) {
         setBrowseData(result.data.data || null)
       } else {
-        addToast({ type: 'error', message: result.message || '获取流量分布失败' })
+        setError(result.message || '获取流量分布失败')
         setBrowseData(null)
       }
     } catch {
-      addToast({ type: 'error', message: '获取流量分布失败，请稍后重试' })
+      setError('获取流量分布失败，请稍后重试')
       setBrowseData(null)
     } finally {
       setLoading(false)
@@ -226,8 +229,10 @@ export function BrowseDistribution() {
         </div>
       )}
 
+      {!loading && error && <DataAnalysisError message={error} />}
+
       {/* 分布图表 */}
-      {!loading && browseData && (
+      {!loading && !error && browseData && (
         <motion.div
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}

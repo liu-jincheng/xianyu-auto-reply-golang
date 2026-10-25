@@ -6,11 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/zhinianboke/xianyu-auto-go/internal/proxy"
-	"image"
-	_ "image/gif"
-	_ "image/jpeg"
-	_ "image/png"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -21,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/zhinianboke/xianyu-auto-go/internal/proxy"
 )
 
 const publishImageUploadURL = "https://stream-upload.goofish.com/api/upload.api?floderId=0&appkey=fleamarket&_input_charset=utf-8"
@@ -28,7 +25,7 @@ const publishImageUploadURL = "https://stream-upload.goofish.com/api/upload.api?
 // buildPublishPayload converts the public material/form contract into the
 // exact idleitem.publish/idleitem.edit DTO shape used by the seller console.
 // It deliberately does not accept the UI form itself as an MTOP payload.
-func buildPublishPayload(ctx context.Context, item map[string]any, account platformAccount, snapshot map[string]any) (map[string]any, string, error) {
+func (s *Server) buildPublishPayload(ctx context.Context, item map[string]any, account platformAccount, snapshot map[string]any) (map[string]any, string, error) {
 	title, description := textValue(item["title"]), textValue(item["description"])
 	if title == "" || description == "" {
 		return nil, account.Cookie, errors.New("商品标题和商品描述不能为空")
@@ -46,7 +43,7 @@ func buildPublishPayload(ctx context.Context, item map[string]any, account platf
 	}
 	imageItems := make([]map[string]any, 0, len(images))
 	for i, source := range images {
-		uploaded, uploadErr := uploadPublishImage(ctx, source, account)
+		uploaded, uploadErr := s.uploadPublishImage(ctx, source, account)
 		if uploadErr != nil {
 			return nil, account.Cookie, fmt.Errorf("第 %d 张图片上传失败：%w", i+1, uploadErr)
 		}
@@ -56,7 +53,7 @@ func buildPublishPayload(ctx context.Context, item map[string]any, account platf
 
 	propertyImageList := []map[string]any{}
 	for _, specImage := range propertyImages {
-		uploaded, uploadErr := uploadPublishImage(ctx, specImage.Source, account)
+		uploaded, uploadErr := s.uploadPublishImage(ctx, specImage.Source, account)
 		if uploadErr != nil {
 			return nil, account.Cookie, fmt.Errorf("规格 %s=%s 图片上传失败：%w", specImage.Property, specImage.Value, uploadErr)
 		}
@@ -330,12 +327,12 @@ func addressScore(t map[string]any, expected string) int {
 	return 4
 }
 
-func uploadPublishImage(ctx context.Context, source string, account platformAccount) (map[string]any, error) {
-	content, name, contentType, e := readPublishImage(ctx, source)
+func (s *Server) uploadPublishImage(ctx context.Context, source string, account platformAccount) (map[string]any, error) {
+	content, name, contentType, e := s.readPublishImage(ctx, source)
 	if e != nil {
 		return nil, e
 	}
-	cfg, _, e := image.DecodeConfig(bytes.NewReader(content))
+	w, h, e := publishImageDimensions(content)
 	if e != nil {
 		return nil, fmt.Errorf("图片无法解析：%w", e)
 	}
@@ -374,7 +371,6 @@ func uploadPublishImage(ctx context.Context, source string, account platformAcco
 	if !ok || !boolValue(result["success"]) || textValue(obj["url"]) == "" {
 		return nil, errors.New("闲鱼图片上传失败：接口未返回有效图片地址")
 	}
-	w, h := cfg.Width, cfg.Height
 	if pix := strings.Split(strings.ToLower(textValue(obj["pix"])), "x"); len(pix) == 2 {
 		if n, x := strconv.Atoi(pix[0]); x == nil {
 			w = n
@@ -385,7 +381,7 @@ func uploadPublishImage(ctx context.Context, source string, account platformAcco
 	}
 	return map[string]any{"extraInfo": map[string]any{"isH": "false", "isT": "false", "raw": "false"}, "isQrCode": false, "url": textValue(obj["url"]), "heightSize": h, "widthSize": w, "major": false, "type": 0, "status": "done"}, nil
 }
-func readPublishImage(ctx context.Context, source string) ([]byte, string, string, error) {
+func (s *Server) readPublishImage(ctx context.Context, source string) ([]byte, string, string, error) {
 	source = strings.TrimSpace(source)
 	if strings.HasPrefix(source, "http://") || strings.HasPrefix(source, "https://") {
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, source, nil)
@@ -407,8 +403,19 @@ func readPublishImage(ctx context.Context, source string) ([]byte, string, strin
 		return b, name, resp.Header.Get("Content-Type"), e
 	}
 	path := source
-	if strings.HasPrefix(strings.ReplaceAll(source, "\\", "/"), "/static/") {
-		path = filepath.Join("data", "static", strings.TrimPrefix(strings.ReplaceAll(source, "\\", "/"), "/static/"))
+	normalized := strings.ReplaceAll(source, "\\", "/")
+	// Materials persist preview URLs, while direct uploads also return disk paths.
+	// Resolve public local URLs against the same data directory used by uploads.
+	for _, directory := range []string{"uploads", "static"} {
+		prefix := "/" + directory + "/"
+		if strings.HasPrefix(normalized, prefix) {
+			relative := filepath.FromSlash(strings.TrimPrefix(normalized, prefix))
+			if !filepath.IsLocal(relative) {
+				return nil, "", "", errors.New("图片路径无效")
+			}
+			path = filepath.Join(s.cfg.DataDir, directory, relative)
+			break
+		}
 	}
 	b, e := os.ReadFile(path)
 	if e != nil {

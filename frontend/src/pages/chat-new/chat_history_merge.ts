@@ -2,7 +2,9 @@
 import type { ChatMessage, Conversation } from '@/api/chatNew'
 
 export const toTimestampMs = (timestamp: number) =>
-  timestamp < 1_000_000_000_000 ? timestamp * 1000 : timestamp
+  Number.isFinite(timestamp) && timestamp > 0
+    ? timestamp < 1_000_000_000_000 ? timestamp * 1000 : timestamp
+    : 0
 
 /** failed=false 是本地发送结果的标记；服务端历史消息没有该字段。 */
 const isLocalPlaceholder = (message: ChatMessage) =>
@@ -47,16 +49,32 @@ export function mergeMessages(latest: ChatMessage[], existing: ChatMessage[]): C
 export const appendMsg = (messages: ChatMessage[], message: ChatMessage) =>
   mergeMessages([message], messages)
 
+export function repairConversationSummary(conversations: Conversation[], cid: string, messages: ChatMessage[]): Conversation[] {
+  const latest = messages[messages.length - 1]
+  if (!latest) return conversations
+  return conversations.map((conversation) => conversation.cid === cid &&
+    /^[\s]*[\[【]其他消息[\]】][\s]*$/.test(conversation.lastMessageSummary) &&
+    toTimestampMs(latest.time) >= toTimestampMs(conversation.lastMessageTime)
+    ? { ...conversation, lastMessageSummary: (latest.type === 'image' ? '[图片]' : latest.card?.title || latest.text).slice(0, 50) }
+    : conversation)
+}
+
 /** 按会话 ID 合并，并保留 HTTP 请求期间收到的更新实时摘要。 */
 export function mergeConversations(latest: Conversation[], existing: Conversation[]): Conversation[] {
   const merged = new Map(existing.map((conversation) => [conversation.cid, conversation]))
   for (const conversation of latest) {
     const previous = merged.get(conversation.cid)
+    const updated = previous?.otherUserId === conversation.otherUserId ? {
+      ...conversation,
+      otherUserName: conversation.otherUserName || previous.otherUserName,
+      otherUserAvatar: conversation.otherUserAvatar || previous.otherUserAvatar,
+      itemTitle: conversation.itemTitle || previous.itemTitle,
+    } : conversation
     merged.set(conversation.cid, previous &&
       toTimestampMs(previous.lastMessageTime) > toTimestampMs(conversation.lastMessageTime)
-      ? { ...conversation, lastMessageTime: previous.lastMessageTime,
+      ? { ...updated, lastMessageTime: previous.lastMessageTime,
         lastMessageSummary: previous.lastMessageSummary, unreadCount: previous.unreadCount }
-      : conversation)
+      : updated)
   }
   return [...merged.values()].sort((a, b) =>
     toTimestampMs(b.lastMessageTime) - toTimestampMs(a.lastMessageTime),

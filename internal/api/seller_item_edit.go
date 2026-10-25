@@ -60,7 +60,7 @@ func (s *Server) sellerItemEdit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	snapshot := nestedMap(detailResult.Response, "data")
-	payload, refreshedCookie, buildErr := buildPublishPayload(r.Context(), form, a, snapshot)
+	payload, refreshedCookie, buildErr := s.buildPublishPayload(r.Context(), form, a, snapshot)
 	if buildErr != nil {
 		write(w, 200, response{Success: false, Message: buildErr.Error()})
 		return

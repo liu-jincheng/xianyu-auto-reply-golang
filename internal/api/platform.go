@@ -2,7 +2,6 @@ package api
 
 import (
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"net/http"
 
@@ -38,9 +37,10 @@ func (s *Server) loadPlatformAccounts(r *http.Request, id string) ([]platformAcc
 	out := []platformAccount{}
 	for rows.Next() {
 		var a platformAccount
-		if e = rows.Scan(&a.ID, &a.OwnerID, &a.AccountID, &a.Cookie, &a.ProxyType, &a.ProxyHost, &a.ProxyPort, &a.ProxyUser, &a.ProxyPass); e == nil {
-			out = append(out, a)
+		if e = rows.Scan(&a.ID, &a.OwnerID, &a.AccountID, &a.Cookie, &a.ProxyType, &a.ProxyHost, &a.ProxyPort, &a.ProxyUser, &a.ProxyPass); e != nil {
+			return nil, e
 		}
+		out = append(out, a)
 	}
 	return out, rows.Err()
 }
@@ -69,6 +69,10 @@ func (s *Server) fetchItemsPage(w http.ResponseWriter, r *http.Request) {
 	if p.Page < 1 {
 		p.Page = 1
 	}
+	if p.Page > 200 {
+		fail(w, 400, "商品页码不能超过200")
+		return
+	}
 	accounts, e := s.loadPlatformAccounts(r, p.CookieID)
 	if e != nil || len(accounts) == 0 {
 		fail(w, 404, "账号不存在或未启用")
@@ -85,7 +89,10 @@ func (s *Server) fetchItemsAll(w http.ResponseWriter, r *http.Request) {
 	var p struct {
 		CookieID string `json:"cookie_id"`
 	}
-	_ = decode(r, &p)
+	if decode(r, &p) != nil {
+		fail(w, 400, "请求格式错误")
+		return
+	}
 	accounts, e := s.loadPlatformAccounts(r, p.CookieID)
 	if e != nil {
 		fail(w, 500, e.Error())
@@ -94,17 +101,21 @@ func (s *Server) fetchItemsAll(w http.ResponseWriter, r *http.Request) {
 	total, saved, success := 0, 0, 0
 	failed := []string{}
 	for _, a := range accounts {
+		session := xianyu.ItemSyncAccount{OwnerID: a.OwnerID, AccountID: a.AccountID, Cookie: a.Cookie, Proxy: accountProxy(a)}
 		accountOK := true
 		for page := 1; page <= 200; page++ {
-			items, more, e := s.fetchSellerItems(r, a, page)
+			result, e := xianyu.SyncItemPage(r.Context(), s.db, s.itemMTOPCall, &session, page)
+			total += result.Fetched
+			saved += len(result.Items)
+			if e == nil && page == 200 && result.HasMore {
+				e = fmt.Errorf("商品超过单次同步的200页上限，尚未全部获取")
+			}
 			if e != nil {
 				failed = append(failed, a.AccountID+": "+e.Error())
 				accountOK = false
 				break
 			}
-			total += len(items)
-			saved += len(items)
-			if !more {
+			if !result.HasMore {
 				break
 			}
 		}
@@ -112,37 +123,32 @@ func (s *Server) fetchItemsAll(w http.ResponseWriter, r *http.Request) {
 			success++
 		}
 	}
-	write(w, 200, map[string]any{"success": len(failed) == 0, "message": "商品同步完成", "total_count": total, "saved_count": saved, "account_count": len(accounts), "success_account_count": success, "failed_account_count": len(failed), "failed_accounts": failed})
+	message := fmt.Sprintf("商品同步成功：%d 个账号，共获取 %d 件，保存 %d 件", success, total, saved)
+	if len(accounts) == 0 {
+		message = "没有可同步的账号，请先添加并启用闲鱼账号"
+	} else if len(failed) > 0 {
+		if success > 0 || saved > 0 {
+			message = fmt.Sprintf("商品同步部分成功：%d/%d 个账号成功，保存 %d 件，%d 个账号失败；%s", success, len(accounts), saved, len(failed), failed[0])
+		} else {
+			message = "商品同步失败：" + failed[0]
+		}
+	}
+	write(w, 200, map[string]any{"success": len(accounts) > 0 && len(failed) == 0, "message": message, "total_count": total, "saved_count": saved, "account_count": len(accounts), "success_account_count": success, "failed_account_count": len(failed), "failed_accounts": failed})
 }
 func (s *Server) fetchSellerItems(r *http.Request, a platformAccount, page int) ([]map[string]any, bool, error) {
-	result := xianyu.MTOPCall(r.Context(), xianyu.MTOPOptions{API: "mtop.alibaba.idle.seller.pc.common.item.search", Version: "1.0", Cookie: a.Cookie, Proxy: accountProxy(a), Origin: "https://seller.goofish.com", Referer: "https://seller.goofish.com/?site=COMMONPRO", Data: map[string]any{"pageNo": page, "pageSize": 30, "bizType": "commonPro", "searchRequest": "{}", "itemStatus": "0"}, ExtraParams: map[string]string{"spm_cnt": "a21107h.42826273.0.0", "needLoginPC": "true", "accountSite": "xianyu"}, ExtraHeaders: map[string]string{"idle_site_biz_code": "COMMONPRO", "idle_user_group_member_id": ""}})
-	if result.Cookie != a.Cookie && result.Cookie != "" {
-		_, _ = s.db.ExecContext(r.Context(), `UPDATE xy_accounts SET cookie=?,last_refresh_at=CURRENT_TIMESTAMP WHERE id=?`, result.Cookie, a.ID)
-	}
-	if !result.Success {
-		return nil, false, fmt.Errorf("获取商品失败: %s", result.Error)
-	}
-	biz := nestedMap(result.Response, "data", "data")
-	raw, _ := biz["itemSearchResponseList"].([]any)
-	out := []map[string]any{}
-	for _, v := range raw {
-		m, okv := v.(map[string]any)
-		if !okv {
-			continue
-		}
-		id := fmt.Sprint(m["itemId"])
-		if id == "" {
-			continue
-		}
-		mapped := map[string]any{"item_id": id, "id": id, "title": fmt.Sprint(m["title"]), "price": fmt.Sprint(m["reservePrice"]), "status": fmt.Sprint(m["itemStatus"]), "source": "seller", "image_url": fmt.Sprint(m["itemImageUrl"]), "quantity": m["quantity"], "idle_item_sku_list": m["idleItemSkuList"]}
-		b, _ := json.Marshal(mapped)
-		_, e := s.db.ExecContext(r.Context(), `INSERT INTO xy_catalog_items(owner_id,account_id,item_id,title,price,status,data) VALUES(?,?,?,?,?,?,?) ON CONFLICT(account_id,item_id) DO UPDATE SET title=excluded.title,price=excluded.price,status=excluded.status,data=json_patch(COALESCE(xy_catalog_items.data,'{}'),excluded.data),updated_at=CURRENT_TIMESTAMP`, a.OwnerID, a.AccountID, id, mapped["title"], mapped["price"], mapped["status"], string(b))
-		if e == nil {
-			out = append(out, mapped)
+	// The personal page uses an opaque cursor, so replay earlier pages when a
+	// caller requests a standalone later page.
+	session := xianyu.ItemSyncAccount{OwnerID: a.OwnerID, AccountID: a.AccountID, Cookie: a.Cookie, Proxy: accountProxy(a)}
+	for currentPage := 1; currentPage <= page; currentPage++ {
+		result, err := xianyu.SyncItemPage(r.Context(), s.db, s.itemMTOPCall, &session, currentPage)
+		if err != nil || currentPage == page || !result.HasMore {
+			if err == nil && currentPage < page {
+				return []map[string]any{}, false, nil
+			}
+			return result.Items, result.HasMore, err
 		}
 	}
-	more, _ := biz["hasNextPage"].(bool)
-	return out, more, nil
+	return []map[string]any{}, false, nil
 }
 func nestedMap(root map[string]any, keys ...string) map[string]any {
 	cur := root

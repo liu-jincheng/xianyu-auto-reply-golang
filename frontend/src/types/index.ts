@@ -135,8 +135,8 @@ export interface Item {
   price?: string
   item_price?: string
   item_quantity?: string | number   // 库存（鱼小铺）
-  item_shelf_time?: string          // 上架时间（鱼小铺）
-  item_status_desc?: string         // 商品状态文案（鱼小铺）
+  item_shelf_time?: string          // 闲鱼实际上架时间
+  item_status_desc?: string         // 闲鱼实际商品状态文案
   item_sku_list?: ItemSku[]         // 多规格明细（鱼小铺）
   item_sku_count?: number           // 规格数（鱼小铺）
   is_seller_item?: boolean          // 是否鱼小铺商品（仅鱼小铺可改价）
@@ -150,6 +150,11 @@ export interface Item {
   has_card?: boolean               // 是否配置了发货卡券
   ai_prompt?: string               // AI提示词
   has_ai_prompt?: boolean          // 是否配置了AI提示词
+  platform_created_at?: string
+  platform_updated_at?: string
+  last_synced_at?: string
+  local_created_at?: string
+  local_updated_at?: string
   created_at?: string
   updated_at?: string
 }

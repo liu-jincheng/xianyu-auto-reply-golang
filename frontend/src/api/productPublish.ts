@@ -484,7 +484,7 @@ export const publishSingle = (params: {
   platform_attributes?: PlatformMaterialAttribute[]
   category_source?: 'manual' | 'recommendation'
   category_confidence?: number | null
-  images: string[]        // 本地绝对路径，由 uploadProductImages 返回
+  images: string[]        // 支持上传返回的本地路径、素材库 /uploads/ 地址及远程图片 URL
   videos?: MaterialVideo[]
   quantity?: number
   specifications?: PublishSpecification[]
@@ -513,7 +513,7 @@ export const getBatchStatus = (batchId: string): Promise<BatchStatusResponse> =>
 
 // ==================== 图片上传 ====================
 
-/** 上传商品图片（返回本地路径供 Playwright 使用 + URL 供预览）
+/** 上传商品图片（返回本地路径和可用于素材保存、预览及发布的 URL）
  *  注意：不要手动设置 Content-Type，axios 会自动添加正确的 multipart boundary
  */
 export const uploadProductImages = async (files: File[]): Promise<{

@@ -1,4 +1,5 @@
 import { formatDateTime } from '@/utils/date'
+import { getItemSyncFeedback } from '@/utils/itemSyncFeedback'
 import { useEffect, useState, useRef } from 'react'
 import { CheckSquare, Download, Edit2, ExternalLink, Loader2, Package, PackageX, RefreshCw, Search, Square, Trash2, X, Settings, Plus, MessageSquare, Bot, ChevronLeft, ChevronRight, ImagePlus, Unlink, Tag } from 'lucide-react'
 import { batchDeleteItems, batchDeleteXianyuItems, batchOfflineItems, deleteItem, fetchAllItemsFromAccessibleAccounts, fetchAllItemsFromAccount, getItemsPaginated, updateItem, updateItemMultiQuantityDelivery, updateItemMultiSpec, updateItemPrice, getItemDefaultReply, saveItemDefaultReply, deleteItemDefaultReply, batchSaveItemDefaultReply, batchDeleteItemDefaultReply, getItemAiPrompt, saveItemAiPrompt, batchDeleteItemAiPrompt, batchSaveItemAiPrompt, uploadItemDefaultReplyImage, uploadBatchDefaultReplyImage, type ItemFilterParams } from '@/api/items'
@@ -236,15 +237,9 @@ export function Items() {
     try {
       // 使用获取所有页的接口，后端会自动遍历所有页
       const result = await fetchAllItemsFromAccount(selectedAccount)
-
-      if (result.success) {
-        const totalCount = (result as { total_count?: number }).total_count || 0
-        const savedCount = (result as { saved_count?: number }).saved_count || 0
-        addToast({ type: 'success', message: `成功获取商品，共 ${totalCount} 件，保存 ${savedCount} 件` })
-        await loadItems()
-      } else {
-        addToast({ type: 'error', message: result.message || '获取商品失败' })
-      }
+      const { reload, ...toast } = getItemSyncFeedback(result)
+      addToast(toast)
+      if (reload) await loadItems(1)
     } catch {
       addToast({ type: 'error', message: '获取商品失败' })
     } finally {
@@ -257,25 +252,9 @@ export function Items() {
 
     try {
       const result = await fetchAllItemsFromAccessibleAccounts()
-
-      if (result.success) {
-        const totalCount = result.total_count || 0
-        const savedCount = result.saved_count || 0
-        const accountCount = result.account_count || 0
-        const successAccountCount = result.success_account_count || 0
-        const failedAccountCount = result.failed_account_count || 0
-        const firstFailedAccount = result.failed_accounts?.[0]
-        const message = failedAccountCount > 0
-          ? `已获取 ${successAccountCount}/${accountCount} 个账号商品，共 ${totalCount} 件，保存 ${savedCount} 件；失败 ${failedAccountCount} 个账号${firstFailedAccount ? `，例如：${firstFailedAccount}` : ''}`
-          : `成功获取 ${accountCount} 个账号商品，共 ${totalCount} 件，保存 ${savedCount} 件`
-        addToast({
-          type: failedAccountCount > 0 ? 'warning' : 'success',
-          message,
-        })
-        await loadItems()
-      } else {
-        addToast({ type: 'error', message: result.message || '获取所有账号商品失败' })
-      }
+      const { reload, ...toast } = getItemSyncFeedback(result)
+      addToast(toast)
+      if (reload) await loadItems(1)
     } catch {
       addToast({ type: 'error', message: '获取所有账号商品失败' })
     } finally {
@@ -1523,8 +1502,8 @@ export function Items() {
                   <th className="min-w-[110px] text-center">关联卡券</th>
                   <th className="min-w-[110px] text-center">默认回复</th>
                   <th className="min-w-[110px] text-center">AI提示词</th>
-                  <th className="min-w-[170px]">创建时间</th>
-                  <th className="min-w-[170px]">更新时间</th>
+                  <th className="min-w-[170px]" title="闲鱼商品的实际创建时间">创建时间</th>
+                  <th className="min-w-[170px]" title="闲鱼商品的实际更新时间，平台未提供时显示 -">更新时间</th>
                   <th className="sticky right-0 bg-slate-50 dark:bg-slate-800 min-w-[70px]">操作</th>
               </tr>
             </thead>
@@ -1590,7 +1569,7 @@ export function Items() {
                       {item.item_status_desc || '-'}
                     </td>
                     <td className="text-gray-500 text-xs">
-                      {item.item_shelf_time || '-'}
+                      {item.item_shelf_time ? formatDateTime(item.item_shelf_time) : '-'}
                     </td>
                     <td>
                       <span
@@ -1686,10 +1665,10 @@ export function Items() {
                         {item.has_ai_prompt ? '已配置' : '未配置'}
                       </button>
                     </td>
-                    <td className="text-gray-500 text-xs">
+                    <td className="text-gray-500 text-xs" title={item.created_at ? '闲鱼商品的实际创建时间' : '闲鱼未提供商品创建时间'}>
                       {item.created_at ? formatDateTime(item.created_at) : '-'}
                     </td>
-                    <td className="text-gray-500 text-xs">
+                    <td className="text-gray-500 text-xs" title={item.updated_at ? '闲鱼商品的实际更新时间' : '闲鱼未提供商品更新时间'}>
                       {item.updated_at ? formatDateTime(item.updated_at) : '-'}
                     </td>
                     <td className="sticky right-0 bg-white dark:bg-slate-900">

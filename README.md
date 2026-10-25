@@ -1,5 +1,11 @@
 ## 闲鱼自动回复系统
 
+本仓库由 [liu-jincheng](https://github.com/liu-jincheng) 维护，基于 [Heartestrella/xianyu-auto-reply-golang](https://github.com/Heartestrella/xianyu-auto-reply-golang) 进行修改，保留上游提交历史与 AGPL-3.0 许可证。
+
+本分支于 2026-10-25 整理当前改动，包含聊天记录恢复与消息卡片展示、商品同步与发布相关修复，以及配套测试。
+
+下文中的上游 Docker 镜像和发布包仍由原项目提供；运行本仓库的修改版本，请从本仓库源码构建。
+
 该项目基于 [闲鱼自动回复系统](https://github.com/zhinianboke/xianyu-auto-reply) 重构的 **Golang** 版本。
 
 相比于原版的占用，该版本在常驻状态下仅占用不到 **40MB** 的空间。
@@ -14,7 +20,7 @@
 > 
 > 该项目处于 **测试阶段**，可能存在诸多 bug。
 > 
-> 不建议直接接替原项目使用。如果您有问题，请返回 [issue](https://github.com/Heartestrella/xianyu-auto-reply-golang/issues) 反馈。
+> 不建议直接接替原项目使用。如果您有问题，请在本仓库的 [Issues](https://github.com/liu-jincheng/xianyu-auto-reply-golang/issues) 反馈。
 
 ## 需要在外网访问但是没有公网IP?
 推荐使用[Beefrp](https://beefrp.cn) 免费使用隧道内网穿透 支持全平台/Docker部署 价格便宜实惠

@@ -54,6 +54,9 @@ type Server struct {
 	passwordMu      sync.Mutex
 	passwordLogins  map[string]*passwordLoginSession
 	orderMTOPCall   func(context.Context, xianyu.MTOPOptions) xianyu.MTOPResult
+	chatMTOPCall    func(context.Context, xianyu.MTOPOptions) xianyu.MTOPResult
+	chatHistoryRead func(context.Context, string, string, []any) (map[string]any, error)
+	itemMTOPCall    func(context.Context, xianyu.MTOPOptions) xianyu.MTOPResult
 }
 type response struct {
 	Success bool   `json:"success"`
@@ -80,6 +83,9 @@ func (s *Server) SetChatSender(send func(context.Context, string, string, string
 }
 func (s *Server) SetChatCreator(create func(context.Context, string, string, string) (string, error)) {
 	s.chatCreate = create
+}
+func (s *Server) SetChatHistoryReader(read func(context.Context, string, string, []any) (map[string]any, error)) {
+	s.chatHistoryRead = read
 }
 func (s *Server) SetItemDetailFetcher(fetch func(context.Context, platformAccount, string) xianyu.MTOPResult) {
 	s.itemDetailFetch = fetch
@@ -1084,9 +1090,10 @@ func (s *Server) accountList(w http.ResponseWriter, r *http.Request) {
 			where = append(where, "(COALESCE(a.username,'')='' OR COALESCE(a.login_password,'')='')")
 		}
 	}
+	// Read the same latest record as the settings dialog and the reply worker.
+	const aiEnabledExpression = `COALESCE((SELECT CASE WHEN ai.enabled=1 THEN COALESCE(json_extract(ai.data,'$.ai_enabled'),json_extract(ai.data,'$.enabled'),0) ELSE 0 END FROM resource_records ai WHERE ai.owner_id=a.owner_id AND ai.kind='ai_reply' AND ai.account_id=a.account_id ORDER BY ai.id DESC LIMIT 1),0)`
 	if value, ok := queryBool(r, "ai_reply"); ok {
-		expression := "COALESCE(json_extract(a.metadata,'$.ai_reply_settings.ai_enabled'),json_extract(a.metadata,'$.ai_reply_settings.enabled'),0)"
-		where = append(where, expression+"=?")
+		where = append(where, aiEnabledExpression+"=?")
 		args = append(args, value)
 	}
 	if keyword := strings.TrimSpace(r.URL.Query().Get("account_id")); keyword != "" {
@@ -1142,7 +1149,7 @@ func (s *Server) accountList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pageArgs := append(append([]any{}, args...), n, (p-1)*n)
-	rows, e := s.db.QueryContext(r.Context(), `SELECT a.id,a.account_id,a.cookie,a.status,a.remark,a.auto_confirm,a.show_browser,a.pause_duration,a.message_expire_time,a.reply_delay_seconds,a.scheduled_redelivery,a.scheduled_rate,a.auto_polish,a.confirm_before_send,a.send_before_confirm,a.only_send_card,a.auto_red_flower,a.red_flower_after_shipment,a.ai_reply_block_ordered_users,a.delivery_disabled,a.delivery_disabled_reason,a.auto_close_order,a.delivery_only_card_after_close,a.delivery_disabled_excluded_items,a.disable_reason,a.created_at,a.updated_at,a.owner_id,COALESCE(owner.username,''),COALESCE(a.username,''),COALESCE(a.login_password,''),COALESCE(a.metadata,'{}'),
+	rows, e := s.db.QueryContext(r.Context(), `SELECT a.id,a.account_id,a.cookie,a.status,a.remark,a.auto_confirm,a.show_browser,a.pause_duration,a.message_expire_time,a.reply_delay_seconds,a.scheduled_redelivery,a.scheduled_rate,a.auto_polish,a.confirm_before_send,a.send_before_confirm,a.only_send_card,a.auto_red_flower,a.red_flower_after_shipment,a.ai_reply_block_ordered_users,a.delivery_disabled,a.delivery_disabled_reason,a.auto_close_order,a.delivery_only_card_after_close,a.delivery_disabled_excluded_items,a.disable_reason,a.created_at,a.updated_at,a.owner_id,COALESCE(owner.username,''),COALESCE(a.username,''),COALESCE(a.login_password,''),`+aiEnabledExpression+`,
 		(SELECT count(*) FROM resource_records f WHERE f.owner_id=a.owner_id AND f.kind='message_filter' AND COALESCE(f.account_id,'')=a.account_id),
 		(SELECT count(*) FROM xy_keyword_rules k WHERE k.owner_id=a.owner_id AND k.account_id=a.account_id),
 		(SELECT count(*) FROM event_logs l WHERE l.owner_id=a.owner_id AND l.account_id=a.account_id AND l.kind IN ('auto_reply','ai_reply') AND upper(l.level)='INFO' AND date(l.created_at,'localtime')=date('now','localtime')),
@@ -1157,27 +1164,19 @@ func (s *Server) accountList(w http.ResponseWriter, r *http.Request) {
 		var id, ownerID int64
 		var aid, cookie, status, created, updated string
 		var remark, ddr, dr sql.NullString
-		var ownerUsername, username, loginPassword, metadata, connectionError string
+		var ownerUsername, username, loginPassword, connectionError string
+		var aiEnabled bool
 		var filterCount, keywordCount, todayReplyCount int
 		var ac, sb, sr, rate, polish, cbs, sbc, osc, flower, flowerAfterShipment, aib, dd, aco, doc bool
 		var pause, expire, delay int
 		var excluded string
-		e = rows.Scan(&id, &aid, &cookie, &status, &remark, &ac, &sb, &pause, &expire, &delay, &sr, &rate, &polish, &cbs, &sbc, &osc, &flower, &flowerAfterShipment, &aib, &dd, &ddr, &aco, &doc, &excluded, &dr, &created, &updated, &ownerID, &ownerUsername, &username, &loginPassword, &metadata, &filterCount, &keywordCount, &todayReplyCount, &connectionError)
+		e = rows.Scan(&id, &aid, &cookie, &status, &remark, &ac, &sb, &pause, &expire, &delay, &sr, &rate, &polish, &cbs, &sbc, &osc, &flower, &flowerAfterShipment, &aib, &dd, &ddr, &aco, &doc, &excluded, &dr, &created, &updated, &ownerID, &ownerUsername, &username, &loginPassword, &aiEnabled, &filterCount, &keywordCount, &todayReplyCount, &connectionError)
 		if e != nil {
 			continue
 		}
 		online := s.online != nil && s.online(aid)
 		if online {
 			connectionError = ""
-		}
-		meta := map[string]any{}
-		_ = json.Unmarshal([]byte(metadata), &meta)
-		aiEnabled := false
-		if ai, ok := meta["ai_reply_settings"].(map[string]any); ok {
-			aiEnabled, _ = ai["ai_enabled"].(bool)
-			if !aiEnabled {
-				aiEnabled, _ = ai["enabled"].(bool)
-			}
 		}
 		list = append(list, map[string]any{"pk": id, "id": aid, "value": cookie, "enabled": accountStatusEnabled(status), "online": online, "connection_error": connectionError, "remark": remark.String, "auto_confirm": ac, "show_browser": sb, "pause_duration": pause, "message_expire_time": expire, "reply_delay_seconds": delay, "scheduled_redelivery": sr, "scheduled_rate": rate, "auto_polish": polish, "confirm_before_send": cbs, "send_before_confirm": sbc, "only_send_card": osc, "auto_red_flower": flower, "red_flower_after_shipment": flowerAfterShipment, "ai_reply_block_ordered_users": aib, "delivery_disabled": dd, "delivery_disabled_reason": ddr.String, "auto_close_order": aco, "delivery_only_card_after_close": doc, "delivery_disabled_excluded_item_ids": smart(excluded), "disable_reason": dr.String, "username": username, "login_password": loginPassword, "ai_enabled": aiEnabled, "filter_count": filterCount, "keyword_count": keywordCount, "today_reply_count": todayReplyCount, "owner_id": ownerID, "owner_username": ownerUsername, "created_at": created, "updated_at": updated})
 	}
@@ -1580,7 +1579,8 @@ func (s *Server) itemQuery(w http.ResponseWriter, r *http.Request, account strin
 		mergeJSON(m, data)
 		m["id"], m["cookie_id"], m["item_id"] = fmt.Sprint(recordID), ac, id
 		m["title"], m["description"], m["price"], m["status"] = title, desc, price, status
-		m["created_at"], m["updated_at"] = created, updated
+		m["local_created_at"], m["local_updated_at"] = created, updated
+		m["created_at"], m["updated_at"] = firstString(m, "platform_created_at"), firstString(m, "platform_updated_at")
 		defaultReply, hasDefaultReply := m["default_reply"].(map[string]any)
 		m["has_default_reply"] = hasDefaultReply && len(defaultReply) > 0
 		m["default_reply_enabled"] = hasDefaultReply && defaultReply["enabled"] == true

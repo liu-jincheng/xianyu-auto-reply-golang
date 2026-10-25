@@ -57,14 +57,29 @@ export interface Conversation {
 }
 
 /** 聊天消息 */
+export interface ChatCard {
+  kind: 'item' | 'order' | 'notice' | 'dynamic' | 'unknown'
+  title: string
+  text?: string
+  image?: string
+  price?: string
+  tag?: string
+  url?: string
+  fields?: { label: string; value: string }[]
+  fallback?: boolean
+}
+
 export interface ChatMessage {
   messageId: string
   senderId: string
   senderName: string
+  senderAvatar?: string
   isSelf: boolean
   type: 'text' | 'image' | 'system' | 'card'
   text: string
   images: string[]
+  card?: ChatCard | null
+  contentVersion?: number
   time: number
   /** 发送是否失败（仅本地发送的消息可能为 true） */
   failed?: boolean

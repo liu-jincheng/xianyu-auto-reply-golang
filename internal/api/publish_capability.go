@@ -27,41 +27,13 @@ func (s *Server) publishAccountCapability(w http.ResponseWriter, r *http.Request
 		write(w, 200, response{Success: false, Message: "发布账号缺少Cookie，请重新登录账号"})
 		return
 	}
-	backend := xianyu.MTOPCall(r.Context(), xianyu.MTOPOptions{API: "mtop.idle.pc.backend.idleitem.preget", Version: "1.0", Cookie: account.Cookie, Proxy: accountProxy(account), Origin: "https://seller.goofish.com", Referer: "https://seller.goofish.com/?site=COMMONPRO", Data: map[string]any{"publishScene": "pcBackendPublish"}, ExtraParams: map[string]string{"idle_site_biz_code": "COMMONPRO", "spm_cnt": "a21107h.42826273.0.0"}, ExtraHeaders: map[string]string{"idle_site_biz_code": "COMMONPRO", "idle_user_group_member_id": ""}})
-	latestCookie := updateCapabilityCookie(r, s, account, backend.Cookie)
-	if backend.Success {
-		if capability, recognized := parsePublishCapability(backend.Response); recognized && capability["is_fish_shop"] == true {
-			s.writePublishCapability(w, accountID, capability)
-			return
-		}
-	}
-	backendUnreliable := backend.Error == "" || containsAny(strings.ToUpper(backend.Error), "FAIL_SYS_", "RGV587", "VALIDATE", "CAPTCHA", "PUNISH", "FLOW_LIMIT")
-	personal := xianyu.MTOPCall(r.Context(), xianyu.MTOPOptions{API: "mtop.idle.pc.idleitem.preget", Version: "1.0", Cookie: latestCookie, Proxy: accountProxy(account), Origin: "https://www.goofish.com", Referer: "https://www.goofish.com/publish", Data: map[string]any{}, ExtraParams: map[string]string{"spm_cnt": "a21ybx.publish.0.0"}})
-	updateCapabilityCookie(r, s, account, personal.Cookie)
-	if !personal.Success {
-		write(w, 200, response{Success: false, Message: "账号发布能力检测失败：" + firstNonemptyAPI(personal.Error, "闲鱼接口调用失败")})
+	session, err := resolvePublishSession(r.Context(), account, xianyu.MTOPCall)
+	s.persistPublishCookie(r.Context(), account, session.Cookie)
+	if err != nil {
+		write(w, 200, response{Success: false, Message: err.Error()})
 		return
 	}
-	capability, recognized := parsePublishCapability(personal.Response)
-	if !recognized {
-		write(w, 200, response{Success: false, Message: "账号发布能力检测失败：无法识别账号是否开通鱼小铺"})
-		return
-	}
-	if capability["is_fish_shop"] != true && backendUnreliable {
-		write(w, 200, response{Success: false, Message: "账号发布能力检测不可信：鱼小铺后台接口未给出可靠结论，请稍后重试"})
-		return
-	}
-	s.writePublishCapability(w, accountID, capability)
-}
-
-func updateCapabilityCookie(r *http.Request, s *Server, account platformAccount, next string) string {
-	if next == "" {
-		return account.Cookie
-	}
-	if next != account.Cookie {
-		_, _ = s.db.ExecContext(r.Context(), `UPDATE xy_accounts SET cookie=?,last_refresh_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=?`, next, account.ID)
-	}
-	return next
+	s.writePublishCapability(w, accountID, session.Capability)
 }
 
 func parsePublishCapability(response map[string]any) (map[string]any, bool) {

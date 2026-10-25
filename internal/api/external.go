@@ -99,29 +99,14 @@ func (s *Server) externalAccountCapability(w http.ResponseWriter, r *http.Reques
 		externalWrite(w, false, 40002, "闲鱼账号不存在或不属于该秘钥用户", nil)
 		return
 	}
-	backend := xianyu.MTOPCall(r.Context(), xianyu.MTOPOptions{API: "mtop.idle.pc.backend.idleitem.preget", Version: "1.0", Cookie: account.Cookie, Proxy: accountProxy(account), Origin: "https://seller.goofish.com", Referer: "https://seller.goofish.com/?site=COMMONPRO", Data: map[string]any{"publishScene": "pcBackendPublish"}, ExtraParams: map[string]string{"idle_site_biz_code": "COMMONPRO", "spm_cnt": "a21107h.42826273.0.0"}, ExtraHeaders: map[string]string{"idle_site_biz_code": "COMMONPRO", "idle_user_group_member_id": ""}})
-	latest := updateCapabilityCookie(r, s, account, backend.Cookie)
-	if backend.Success {
-		if capability, recognized := parsePublishCapability(backend.Response); recognized && capability["is_fish_shop"] == true {
-			capability["account_id"] = account.AccountID
-			externalWrite(w, true, 200, "账号发布能力获取成功", capability)
-			return
-		}
-	}
-	unreliable := backend.Error == "" || containsAny(strings.ToUpper(backend.Error), "FAIL_SYS_", "RGV587", "VALIDATE", "CAPTCHA", "PUNISH", "FLOW_LIMIT")
-	personal := xianyu.MTOPCall(r.Context(), xianyu.MTOPOptions{API: "mtop.idle.pc.idleitem.preget", Version: "1.0", Cookie: latest, Proxy: accountProxy(account), Origin: "https://www.goofish.com", Referer: "https://www.goofish.com/publish", Data: map[string]any{}, ExtraParams: map[string]string{"spm_cnt": "a21ybx.publish.0.0"}})
-	updateCapabilityCookie(r, s, account, personal.Cookie)
-	if !personal.Success {
-		externalWrite(w, false, 50201, "账号发布能力检测失败："+firstNonemptyAPI(personal.Error, "闲鱼接口调用失败"), nil)
+	session, err := resolvePublishSession(r.Context(), account, xianyu.MTOPCall)
+	s.persistPublishCookie(r.Context(), account, session.Cookie)
+	if err != nil {
+		externalWrite(w, false, 50201, err.Error(), nil)
 		return
 	}
-	capability, recognized := parsePublishCapability(personal.Response)
-	if !recognized || (capability["is_fish_shop"] != true && unreliable) {
-		externalWrite(w, false, 50201, "账号发布能力检测失败，请稍后重试", nil)
-		return
-	}
-	capability["account_id"] = account.AccountID
-	externalWrite(w, true, 200, "账号发布能力获取成功", capability)
+	session.Capability["account_id"] = account.AccountID
+	externalWrite(w, true, 200, "账号发布能力获取成功", session.Capability)
 }
 
 func (s *Server) externalCookieSync(w http.ResponseWriter, r *http.Request) {

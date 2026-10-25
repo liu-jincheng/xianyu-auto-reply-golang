@@ -66,6 +66,7 @@ func main() {
 	app.SetOnlineChecker(xy.Online)
 	app.SetChatSender(xy.SendText)
 	app.SetChatCreator(xy.CreateChat)
+	app.SetChatHistoryReader(xy.ReadChatHistory)
 	app.SetChatRecaller(xy.RecallMessage)
 	app.SetChatImageSender(xy.SendImage)
 	app.SetAccountRestarter(xy.Restart)
@@ -132,14 +133,16 @@ func incomingChatPush(msg xianyu.Incoming) []byte {
 		"account_id": msg.AccountID,
 		"cid":        msg.ChatID,
 		"message": map[string]any{
-			"messageId":  fmt.Sprintf("incoming-%d", receivedAt.UnixNano()),
-			"senderId":   msg.SenderID,
-			"senderName": msg.SenderName,
-			"isSelf":     msg.IsSelf,
-			"type":       messageType,
-			"text":       msg.Text,
-			"images":     msg.Images,
-			"time":       receivedAt.UnixMilli(),
+			"messageId":      fmt.Sprintf("incoming-%d", receivedAt.UnixNano()),
+			"senderId":       msg.SenderID,
+			"senderName":     msg.SenderName,
+			"isSelf":         msg.IsSelf,
+			"type":           messageType,
+			"text":           msg.Text,
+			"images":         msg.Images,
+			"card":           msg.Card,
+			"contentVersion": xianyu.ChatContentVersion,
+			"time":           receivedAt.UnixMilli(),
 		},
 	})
 	return payload

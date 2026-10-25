@@ -64,15 +64,28 @@ func (s *Server) executePublish(ctx context.Context, ownerID int64, accountID st
 	if err = validateMaterial(item); err != nil {
 		return map[string]any{"success": false, "message": err.Error()}
 	}
-	payload, refreshedCookie, buildErr := buildPublishPayload(ctx, item, account, nil)
+	session, capabilityErr := resolvePublishSession(ctx, account, xianyu.MTOPCall)
+	account.Cookie = s.persistPublishCookie(ctx, account, session.Cookie)
+	if capabilityErr != nil {
+		return map[string]any{"success": false, "message": capabilityErr.Error()}
+	}
+	if err = validatePublishCapability(item, session.Capability); err != nil {
+		return map[string]any{"success": false, "message": err.Error()}
+	}
+	if session.Route == personalPublishRoute {
+		cookie, checkErr := checkPersonalPublish(ctx, account, xianyu.MTOPCall)
+		account.Cookie = s.persistPublishCookie(ctx, account, cookie)
+		if checkErr != nil {
+			return map[string]any{"success": false, "message": checkErr.Error()}
+		}
+	}
+	payload, refreshedCookie, buildErr := s.buildPublishPayload(ctx, item, account, nil)
 	if buildErr != nil {
 		return map[string]any{"success": false, "message": buildErr.Error()}
 	}
 	if refreshedCookie != "" {
 		account.Cookie = refreshedCookie
 	}
-	payloadBytes, _ := json.Marshal(payload)
-	request := map[string]any{"inputJson": string(payloadBytes)}
 	requestJSON, _ := json.Marshal(item)
 	var logID int64
 	if batchID != "" {
@@ -81,11 +94,7 @@ func (s *Server) executePublish(ctx context.Context, ownerID int64, accountID st
 			logID, _ = logResult.LastInsertId()
 		}
 	}
-	res := xianyu.MTOPCall(ctx, xianyu.MTOPOptions{
-		API: "mtop.idle.pc.backend.idleitem.publish", Version: "1.0", Cookie: account.Cookie,
-		Proxy: accountProxy(account), Origin: "https://seller.goofish.com", Referer: "https://seller.goofish.com/?site=COMMONPRO",
-		Data: request, ExtraParams: map[string]string{"idle_site_biz_code": "COMMONPRO", "spm_cnt": "a21107h.42826273.0.0"}, ExtraHeaders: map[string]string{"idle_site_biz_code": "COMMONPRO"},
-	})
+	res := xianyu.MTOPCall(ctx, publishRequestOptions(session.Route, account, payload))
 	if res.Cookie != "" && res.Cookie != account.Cookie {
 		_, _ = s.db.ExecContext(ctx, `UPDATE xy_accounts SET cookie=?,last_refresh_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=?`, res.Cookie, account.ID)
 	}
